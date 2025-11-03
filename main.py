@@ -16,8 +16,8 @@ from langgraph.prebuilt import create_react_agent
 from langchain_openai import AzureChatOpenAI
 from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
+# Load environment variables 
+load_dotenv(override=True)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -35,10 +35,11 @@ class ChatResponse(BaseModel):
 
 class Config:
     # Azure OpenAI Configuration
-    AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_KEY")
+    AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
     AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
     AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION")
     AZURE_OPENAI_DEPLOYMENT_NAME = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
+
     
     # Validate required config
     @classmethod
