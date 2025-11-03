@@ -359,21 +359,6 @@ async def health_check():
         "auth_token_required": True
     }
 
-@app.get("/debug")
-async def debug_info():
-    """Debug endpoint to check configuration"""
-    return {
-        "environment_variables": {
-            "AZURE_OPENAI_API_KEY": "***" if config.AZURE_OPENAI_API_KEY else "NOT_SET",
-            "AZURE_OPENAI_ENDPOINT": config.AZURE_OPENAI_ENDPOINT,
-            "AZURE_OPENAI_API_VERSION": config.AZURE_OPENAI_API_VERSION,
-            "AZURE_OPENAI_DEPLOYMENT_NAME": config.AZURE_OPENAI_DEPLOYMENT_NAME,
-        },
-        "working_directory": os.getcwd(),
-        "files_present": os.listdir(os.getcwd()),
-        "mcp_server_running": chat_service.server_manager.is_running,
-        "current_auth_token_set": chat_service.server_manager.current_auth_token is not None
-    }
 
 @app.get("/tools")
 async def get_available_tools(auth_token: str = Depends(get_auth_token)):

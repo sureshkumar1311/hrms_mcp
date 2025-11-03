@@ -209,7 +209,6 @@ class HRMSAPIClient:
         try:
             headers = self._get_headers()
             logger.info(f"Fetching leave statuses with auth token present: {bool(self.auth_token)}")
-            logger.info(f"Auth token (masked): {'***' + self.auth_token[-10:] if self.auth_token and len(self.auth_token) > 10 else 'NOT_SET'}")
             
             response = await self.client.get(
                 f"{self.base_url}/api/Leave/statuses",
@@ -227,7 +226,7 @@ class HRMSAPIClient:
             
             response.raise_for_status()
             result = response.json()
-            logger.info(f"Successfully fetched {len(result) if isinstance(result, list) else 'unknown'} leave statuses")
+            logger.info(f"Successfully fetched leave statuses")
             return result
         except Exception as e:
             logger.error(f"Error fetching leave statuses: {e}")
@@ -244,26 +243,13 @@ class HRMSAPIClient:
                 headers=self._get_headers()
             )
             logger.info(f"Leave types response status: {response.status_code}")
-            logger.info(f"Leave types response body: {response.text[:500]}")
+            
             response.raise_for_status()
             result = response.json()
-            logger.info(f"Leave types result: {result}")
+            logger.info(f"Leave types fetched successfully")
             return result
         except Exception as e:
             logger.error(f"Error fetching leave types: {e}")
-            return {"error": str(e), "status_code": getattr(response, 'status_code', None), "response_text": getattr(response, 'text', None)}
-    
-    async def get_leave_policies(self):
-        """Get all leave policies"""
-        try:
-            response = await self.client.get(
-                f"{self.base_url}/api/LeavePolicies",
-                headers=self._get_headers()
-            )
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            logger.error(f"Error fetching leave policies: {e}")
             return {"error": str(e)}
     
     async def get_leave_day_parts(self):
@@ -277,72 +263,6 @@ class HRMSAPIClient:
             return response.json()
         except Exception as e:
             logger.error(f"Error fetching leave day parts: {e}")
-            return {"error": str(e)}
-    
-    async def get_assign_shift(
-        self,
-        assign_shift_id: Optional[int] = None,
-        search_term: Optional[str] = None,
-        employee_id: Optional[int] = None,
-        from_date: Optional[str] = None,
-        to_date: Optional[str] = None,
-        page_number: Optional[int] = None,
-        page_size: Optional[int] = None
-    ):
-        """Get assigned shifts based on filters"""
-        try:
-            params = {}
-            if assign_shift_id is not None:
-                params["assignShiftId"] = assign_shift_id
-            if search_term is not None:
-                params["searchTerm"] = search_term
-            if employee_id is not None:
-                params["employeeId"] = employee_id
-            if from_date is not None:
-                params["fromDate"] = from_date
-            if to_date is not None:
-                params["toDate"] = to_date
-            if page_number is not None:
-                params["pageNumber"] = page_number
-            if page_size is not None:
-                params["pageSize"] = page_size
-            
-            response = await self.client.get(
-                f"{self.base_url}/api/AssignShift",
-                params=params,
-                headers=self._get_headers()
-            )
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            logger.error(f"Error fetching assigned shifts: {e}")
-            return {"error": str(e)}
-    
-    async def get_attendance_policies(
-        self,
-        policy_id: Optional[int] = None,
-        is_active: Optional[bool] = None,
-        query: Optional[str] = None
-    ):
-        """Get attendance policies"""
-        try:
-            params = {}
-            if policy_id is not None:
-                params["id"] = policy_id
-            if is_active is not None:
-                params["isActive"] = is_active
-            if query is not None:
-                params["q"] = query
-            
-            response = await self.client.get(
-                f"{self.base_url}/api/attendance/policies",
-                params=params,
-                headers=self._get_headers()
-            )
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            logger.error(f"Error fetching attendance policies: {e}")
             return {"error": str(e)}
     
     async def get_holidays(
@@ -422,33 +342,37 @@ class HRMSAPIClient:
             
             logger.info(f"API Response Status: {response.status_code}")
             logger.info(f"API Response Headers: {dict(response.headers)}")
+            logger.info(f"API Response Body: {response.text}")
             
             response.raise_for_status()
             result = response.json()
             
             logger.info(f"✅ Leave application successful!")
-            logger.info(f"API Response Body: {result}")
             
-            return {"success": True, "data": result}
+            return {"success": True, "data": result, "message": "Leave application submitted successfully"}
             
         except httpx.HTTPStatusError as e:
             logger.error("="*60)
             logger.error(f"❌ HTTP error applying leave")
             logger.error(f"Status Code: {e.response.status_code}")
-            logger.error(f"Response Headers: {dict(e.response.headers)}")
             logger.error(f"Response Body: {e.response.text}")
             logger.error("="*60)
             return {
                 "success": False,
                 "error": f"HTTP {e.response.status_code}: {e.response.text}",
-                "status_code": e.response.status_code
+                "status_code": e.response.status_code,
+                "message": f"Failed to apply leave. Status: {e.response.status_code}"
             }
         except Exception as e:
             logger.error("="*60)
             logger.error(f"❌ Exception applying leave: {type(e).__name__}")
             logger.error(f"Error details: {str(e)}")
             logger.error("="*60)
-            return {"success": False, "error": str(e)}
+            return {
+                "success": False,
+                "error": str(e),
+                "message": f"Failed to apply leave: {str(e)}"
+            }
 
 # Initialize FastMCP server and API client
 mcp = FastMCP("hrms-management")
@@ -520,7 +444,7 @@ async def get_leave_history(
     
     # Build payload according to new API structure
     payload = {
-        "empId": emp_id,  # null to get all employees
+        "empId": emp_id,
         "reportingManagerId": reporting_manager_id,
         "status": status,
         "pageNumber": page_number,
@@ -564,15 +488,39 @@ async def get_leave_types() -> Dict[str, Any]:
     - 4: Maternity Leave
     - 5: Paternity Leave
     """
-    result = await api_client.get_leave_types()
-    
-    # If the API call fails, return common leave types as fallback
-    if result.get("error"):
-        logger.warning(f"get_leave_types API failed: {result.get('error')}")
-        logger.info("Returning common leave types as fallback")
+    try:
+        result = await api_client.get_leave_types()
+        
+        # Check if result is a dict with an error
+        if isinstance(result, dict) and result.get("error"):
+            logger.warning(f"get_leave_types API failed: {result.get('error')}")
+            logger.info("Returning common leave types as fallback")
+            return {
+                "fallback": True,
+                "message": "Could not fetch leave types from API. Using common leave type IDs:",
+                "common_leave_types": [
+                    {"id": 1, "name": "Casual Leave", "description": "For personal or urgent work"},
+                    {"id": 2, "name": "Sick Leave", "description": "For illness or medical reasons"},
+                    {"id": 3, "name": "Privilege Leave / Earned Leave", "description": "Annual leave earned by working"},
+                    {"id": 4, "name": "Maternity Leave", "description": "For maternity purposes"},
+                    {"id": 5, "name": "Paternity Leave", "description": "For paternity purposes"}
+                ],
+                "note": "These are common leave type IDs. You can proceed with leave application using these IDs.",
+                "original_error": result.get("error")
+            }
+        
+        # If result is a list (successful API call), return it as is
+        if isinstance(result, list):
+            return {"leave_types": result, "success": True}
+        
+        # If result is a dict without error, return it
+        return result
+        
+    except Exception as e:
+        logger.error(f"Exception in get_leave_types tool: {e}")
         return {
             "fallback": True,
-            "message": "Could not fetch leave types from API. Using common leave type IDs:",
+            "message": "Error fetching leave types. Using common leave type IDs:",
             "common_leave_types": [
                 {"id": 1, "name": "Casual Leave", "description": "For personal or urgent work"},
                 {"id": 2, "name": "Sick Leave", "description": "For illness or medical reasons"},
@@ -580,11 +528,9 @@ async def get_leave_types() -> Dict[str, Any]:
                 {"id": 4, "name": "Maternity Leave", "description": "For maternity purposes"},
                 {"id": 5, "name": "Paternity Leave", "description": "For paternity purposes"}
             ],
-            "note": "These are common leave type IDs. The actual IDs in your system may differ. You can proceed with leave application using these IDs.",
-            "original_error": result.get("error")
+            "note": "These are common leave type IDs. You can proceed with leave application using these IDs.",
+            "error": str(e)
         }
-    
-    return result
 
 @mcp.tool()
 async def get_common_leave_type_ids() -> Dict[str, Any]:
@@ -637,16 +583,6 @@ async def get_common_leave_type_ids() -> Dict[str, Any]:
     }
 
 @mcp.tool()
-async def get_leave_policies() -> Dict[str, Any]:
-    """
-    Get all leave policies.
-    
-    Returns:
-    - List of leave policies including accrual rules, carry forward rules, etc.
-    """
-    return await api_client.get_leave_policies()
-
-@mcp.tool()
 async def get_leave_day_parts() -> Dict[str, Any]:
     """
     Get all possible leave day parts.
@@ -676,13 +612,12 @@ async def apply_leave(
     """
     Apply for leave. The employee ID is automatically extracted from the authentication token.
     
-    IMPORTANT - Common Leave Type IDs (use these if get_leave_types fails):
+    IMPORTANT - Common Leave Type IDs (use these directly):
     - 1: Casual Leave
     - 2: Sick Leave
     - 3: Privilege Leave / Earned Leave
     - 4: Maternity Leave
     - 5: Paternity Leave
-    (Use get_leave_types tool to get the complete list and exact IDs for your organization)
     
     Parameters:
     - leave_type_id: ID of the leave type (REQUIRED - use 1 for Casual Leave, 2 for Sick Leave if unsure)
@@ -698,10 +633,7 @@ async def apply_leave(
     - emergency_contact: Emergency contact number during leave (optional)
     
     Note: Employee ID (empId) is automatically extracted from your authentication token.
-    You do NOT need to call get_leave_types before applying leave. If you know the leave type:
-    - Use 1 for Casual Leave
-    - Use 2 for Sick Leave
-    - Use 3 for Privilege/Earned Leave
+    You do NOT need to call get_leave_types before applying leave.
     
     Returns:
     - Success status and leave application details
@@ -719,7 +651,8 @@ async def apply_leave(
         logger.error("No AUTH_TOKEN available in environment")
         return {
             "success": False,
-            "error": "No authentication token available. Please ensure the server is properly configured."
+            "error": "No authentication token available",
+            "message": "Server configuration error: No authentication token"
         }
     
     logger.info(f"Attempting to extract empId from token (token length: {len(AUTH_TOKEN)})")
@@ -729,7 +662,8 @@ async def apply_leave(
         logger.error("Failed to extract empId from token")
         return {
             "success": False,
-            "error": "Could not extract employee ID from authentication token. Please ensure you are properly authenticated and your token contains an employee ID field."
+            "error": "Could not extract employee ID from authentication token",
+            "message": "Authentication error: Could not extract employee ID from token"
         }
     
     logger.info(f"✅ Successfully extracted empId={emp_id} from JWT token")
@@ -739,7 +673,8 @@ async def apply_leave(
         logger.error("Leave reason is empty or missing")
         return {
             "success": False,
-            "error": "Leave reason is required and cannot be empty"
+            "error": "Leave reason is required and cannot be empty",
+            "message": "Validation error: Leave reason is required"
         }
     
     # Calculate number of days if not provided
@@ -761,7 +696,8 @@ async def apply_leave(
             logger.error(f"Date parsing error: {e}")
             return {
                 "success": False,
-                "error": f"Invalid date format. Use YYYY-MM-DD. Error: {str(e)}"
+                "error": f"Invalid date format: {str(e)}",
+                "message": "Validation error: Invalid date format. Use YYYY-MM-DD"
             }
     
     # Validate number_of_days
@@ -769,7 +705,8 @@ async def apply_leave(
         logger.error(f"Invalid number_of_days: {number_of_days}")
         return {
             "success": False,
-            "error": f"Number of days must be between 0.5 and 365. Calculated: {number_of_days}"
+            "error": f"Number of days must be between 0.5 and 365. Got: {number_of_days}",
+            "message": f"Validation error: Invalid number of days ({number_of_days})"
         }
     
     # Validate day parts
@@ -777,17 +714,19 @@ async def apply_leave(
         logger.error(f"Invalid from_leave_day_part: {from_leave_day_part}")
         return {
             "success": False,
-            "error": f"from_leave_day_part must be 1 (First Half), 2 (Second Half), or 3 (Full Day). Got: {from_leave_day_part}"
+            "error": f"from_leave_day_part must be 1, 2, or 3. Got: {from_leave_day_part}",
+            "message": "Validation error: Invalid day part value"
         }
     
     if to_leave_day_part not in [1, 2, 3]:
         logger.error(f"Invalid to_leave_day_part: {to_leave_day_part}")
         return {
             "success": False,
-            "error": f"to_leave_day_part must be 1 (First Half), 2 (Second Half), or 3 (Full Day). Got: {to_leave_day_part}"
+            "error": f"to_leave_day_part must be 1, 2, or 3. Got: {to_leave_day_part}",
+            "message": "Validation error: Invalid day part value"
         }
     
-    # Build leave application payload according to new API structure
+    # Build leave application payload according to API structure
     leave_data = {
         "empId": emp_id,
         "leaveTypeId": leave_type_id,
@@ -814,68 +753,6 @@ async def apply_leave(
         logger.error(f"❌ Leave application failed: {result.get('error')}")
     
     return result
-
-# ==== SHIFT TOOLS ====
-
-@mcp.tool()
-async def get_assign_shift(
-    assign_shift_id: Optional[int] = None,
-    search_term: Optional[str] = None,
-    employee_id: Optional[int] = None,
-    from_date: Optional[str] = None,
-    to_date: Optional[str] = None,
-    page_number: int = 1,
-    page_size: int = 10
-) -> Dict[str, Any]:
-    """
-    Get assigned shifts based on filters.
-    
-    Parameters:
-    - assign_shift_id: Specific shift assignment ID
-    - search_term: Search term to filter results
-    - employee_id: Employee ID to filter shifts
-    - from_date: Start date filter (format: YYYY-MM-DD)
-    - to_date: End date filter (format: YYYY-MM-DD)
-    - page_number: Page number for pagination (default: 1)
-    - page_size: Number of records per page (default: 10)
-    
-    Returns:
-    - Collection of assigned shifts matching the filters
-    """
-    return await api_client.get_assign_shift(
-        assign_shift_id=assign_shift_id,
-        search_term=search_term,
-        employee_id=employee_id,
-        from_date=from_date,
-        to_date=to_date,
-        page_number=page_number,
-        page_size=page_size
-    )
-
-# ==== ATTENDANCE TOOLS ====
-
-@mcp.tool()
-async def get_attendance_policies(
-    policy_id: Optional[int] = None,
-    is_active: Optional[bool] = None,
-    query: Optional[str] = None
-) -> Dict[str, Any]:
-    """
-    Get attendance policies for the company and branch.
-    
-    Parameters:
-    - policy_id: Optional ID of specific policy. If null, lists all policies
-    - is_active: Optional filter for active/inactive policies
-    - query: Optional query string to filter by policy name
-    
-    Returns:
-    - The requested policy or list of attendance policies
-    """
-    return await api_client.get_attendance_policies(
-        policy_id=policy_id,
-        is_active=is_active,
-        query=query
-    )
 
 # ==== HOLIDAY TOOLS ====
 
@@ -929,41 +806,6 @@ async def get_company(
         page_no=page_no,
         page_size=page_size
     )
-
-# ==== DEBUG TOOLS ====
-
-@mcp.tool()
-async def test_api_connection() -> Dict[str, Any]:
-    """
-    Test the API connection and authentication.
-    Returns the raw response from the leave types endpoint for debugging.
-    """
-    try:
-        headers = api_client._get_headers()
-        logger.info(f"Testing API connection with headers: {headers}")
-        
-        response = await api_client.client.get(
-            f"{api_client.base_url}/api/LeaveTypes",
-            headers=headers
-        )
-        
-        result = {
-            "status_code": response.status_code,
-            "headers": dict(response.headers),
-            "body": response.text,
-            "auth_token_present": bool(api_client.auth_token),
-            "base_url": api_client.base_url
-        }
-        
-        logger.info(f"API test result: {result}")
-        return result
-    except Exception as e:
-        logger.error(f"API connection test failed: {e}")
-        return {
-            "error": str(e),
-            "auth_token_present": bool(api_client.auth_token),
-            "base_url": api_client.base_url
-        }
 
 # The transport="stdio" argument tells the server to use standard input/output 
 # to receive and respond to tool function calls
