@@ -1,0 +1,27 @@
+# Python cache and virtual environments
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+.venv/
+venv/
+.env
+
+# VSCode settings
+.vscode/
+.settings/
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Build and logs
+*.log
+*.egg-info/
+dist/
+build/
+ 
+demo.py
+tst.py
+streamlit_app.py
