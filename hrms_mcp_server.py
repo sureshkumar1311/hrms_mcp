@@ -18,11 +18,14 @@ logger = logging.getLogger("hrms-mcp-server")
 
 # Configuration
 HRMS_API_BASE_URL = "https://portalapi.kryptosinfosys.com"
-# Get auth token from environment variable (set by main.py)
-AUTH_TOKEN = os.getenv("HRMS_AUTH_TOKEN", "")
 
-if not AUTH_TOKEN:
-    logger.warning("No auth token provided via environment variable HRMS_AUTH_TOKEN")
+# DON'T cache AUTH_TOKEN at module level - read it fresh each time
+def get_current_auth_token() -> str:
+    """Get the current auth token from environment - read fresh each time"""
+    token = os.getenv("HRMS_AUTH_TOKEN", "")
+    if not token:
+        logger.warning("No auth token found in environment variable HRMS_AUTH_TOKEN")
+    return token
 
 class JWTHelper:
     """Helper class to decode JWT tokens"""
@@ -35,7 +38,10 @@ class JWTHelper:
         """
         try:
             payload = jwt.decode(token, options={"verify_signature": False})
-            logger.info(f"Decoded JWT payload: {payload}")
+            logger.info(f"Decoded JWT payload keys: {list(payload.keys())}")
+            # Log the uid specifically for debugging
+            if 'uid' in payload:
+                logger.info(f"Found uid in token: {payload['uid']}")
             return payload
         except Exception as e:
             logger.error(f"Failed to decode JWT: {e}")
@@ -44,6 +50,12 @@ class JWTHelper:
     @staticmethod
     def get_emp_id_from_token(token: str) -> Optional[int]:
         """Extract empId from JWT token"""
+        if not token:
+            logger.error("No token provided to get_emp_id_from_token")
+            return None
+            
+        logger.info(f"Extracting empId from token (length: {len(token)}, first 20: {token[:20]}...)")
+        
         decoded = JWTHelper.decode_token(token)
         if decoded:
             # Try different common field names for employee ID
@@ -52,13 +64,16 @@ class JWTHelper:
                 if key in decoded:
                     try:
                         emp_id = int(decoded[key])
-                        logger.info(f"Successfully extracted empId={emp_id} from JWT token field '{key}'")
+                        logger.info(f" Successfully extracted empId={emp_id} from JWT token field '{key}'")
+                        logger.info(f"Token also contains: uname={decoded.get('uname', 'N/A')}, email={decoded.get('email', 'N/A')}")
                         return emp_id
                     except (ValueError, TypeError) as e:
                         logger.warning(f"Found key '{key}' but couldn't convert to int: {decoded[key]}, error: {e}")
                         continue
-            logger.error(f"Could not find empId in token. Available keys: {list(decoded.keys())}")
+            logger.error(f" Could not find empId in token. Available keys: {list(decoded.keys())}")
             logger.error(f"Token payload: {decoded}")
+        else:
+            logger.error(" Token decoding returned empty dict")
         return None
 
 class DateParser:
@@ -177,16 +192,22 @@ class DateParser:
 class HRMSAPIClient:
     """Client to interact with the HRMS APIs"""
     
-    def __init__(self, base_url: str, auth_token: str = ""):
+    def __init__(self, base_url: str):
         self.base_url = base_url
-        self.auth_token = auth_token
         self.client = httpx.AsyncClient(timeout=30.0)
-        logger.info(f"HRMSAPIClient initialized with auth_token: {'***' if auth_token else 'NOT_SET'}")
+        logger.info(f"HRMSAPIClient initialized")
     
-    def _get_headers(self) -> Dict[str, str]:
+    def _get_headers(self, auth_token: str = None) -> Dict[str, str]:
+        """Get headers with fresh auth token"""
+        if not auth_token:
+            auth_token = get_current_auth_token()
+        
         headers = {"Content-Type": "application/json"}
-        if self.auth_token:
-            headers["Authorization"] = f"Bearer {self.auth_token}"
+        if auth_token:
+            headers["Authorization"] = f"Bearer {auth_token}"
+            logger.info(f"Using auth token (first 20 chars): {auth_token[:20]}...")
+        else:
+            logger.warning("No auth token available for headers")
         return headers
     
     async def get_leave_history(self, payload: Dict[str, Any]):
@@ -207,12 +228,9 @@ class HRMSAPIClient:
     async def get_leave_statuses(self):
         """Get all possible leave statuses"""
         try:
-            headers = self._get_headers()
-            logger.info(f"Fetching leave statuses with auth token present: {bool(self.auth_token)}")
-            
             response = await self.client.get(
                 f"{self.base_url}/api/Leave/statuses",
-                headers=headers
+                headers=self._get_headers()
             )
             logger.info(f"Leave statuses response status: {response.status_code}")
             
@@ -220,8 +238,7 @@ class HRMSAPIClient:
                 logger.error("401 Unauthorized - Auth token may be invalid or expired")
                 return {
                     "error": "Unauthorized - Authentication token is invalid or expired",
-                    "status_code": 401,
-                    "auth_token_present": bool(self.auth_token)
+                    "status_code": 401
                 }
             
             response.raise_for_status()
@@ -230,10 +247,7 @@ class HRMSAPIClient:
             return result
         except Exception as e:
             logger.error(f"Error fetching leave statuses: {e}")
-            return {
-                "error": str(e),
-                "auth_token_present": bool(self.auth_token)
-            }
+            return {"error": str(e)}
     
     async def get_leave_types(self):
         """Get all leave types"""
@@ -265,95 +279,42 @@ class HRMSAPIClient:
             logger.error(f"Error fetching leave day parts: {e}")
             return {"error": str(e)}
     
-    async def get_holidays(
-        self,
-        holiday_type_filter: Optional[str] = None,
-        year: Optional[int] = None,
-        from_date: Optional[str] = None,
-        to_date: Optional[str] = None
-    ):
-        """Get holidays based on filters"""
-        try:
-            params = {}
-            if holiday_type_filter is not None:
-                params["HolidayTypeFilter"] = holiday_type_filter
-            if year is not None:
-                params["Year"] = year
-            if from_date is not None:
-                params["FromDate"] = from_date
-            if to_date is not None:
-                params["ToDate"] = to_date
-            
-            response = await self.client.get(
-                f"{self.base_url}/api/Holidays",
-                params=params,
-                headers=self._get_headers()
-            )
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            logger.error(f"Error fetching holidays: {e}")
-            return {"error": str(e)}
-    
-    async def get_company(
-        self,
-        company_id: Optional[str] = None,
-        page_no: Optional[int] = None,
-        page_size: Optional[int] = None
-    ):
-        """Get company information"""
-        try:
-            params = {}
-            if company_id is not None:
-                params["id"] = company_id
-            if page_no is not None:
-                params["pageNo"] = page_no
-            if page_size is not None:
-                params["pageSize"] = page_size
-            
-            response = await self.client.get(
-                f"{self.base_url}/api/Companies",
-                params=params,
-                headers=self._get_headers()
-            )
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            logger.error(f"Error fetching company info: {e}")
-            return {"error": str(e)}
     
     async def apply_leave(self, leave_data: Dict[str, Any]):
         """Apply for leave with the new API structure"""
         try:
+            # Get fresh token for this request
+            current_token = get_current_auth_token()
+            
             logger.info("="*60)
             logger.info("API CLIENT: Applying leave")
             logger.info(f"URL: {self.base_url}/api/Leave/apply")
             logger.info(f"Payload: {leave_data}")
-            logger.info(f"Auth token present: {bool(self.auth_token)}")
-            if self.auth_token:
-                logger.info(f"Auth token (first 20 chars): {self.auth_token[:20]}...")
+            logger.info(f"Auth token present: {bool(current_token)}")
+            if current_token:
+                logger.info(f"Auth token (first 30 chars): {current_token[:30]}...")
+                logger.info(f"Auth token (last 20 chars): ...{current_token[-20:]}")
             logger.info("="*60)
             
             response = await self.client.post(
                 f"{self.base_url}/api/Leave/apply",
                 json=leave_data,
-                headers=self._get_headers()
+                headers=self._get_headers(current_token)
             )
             
             logger.info(f"API Response Status: {response.status_code}")
-            logger.info(f"API Response Headers: {dict(response.headers)}")
             logger.info(f"API Response Body: {response.text}")
             
             response.raise_for_status()
             result = response.json()
             
-            logger.info(f"✅ Leave application successful!")
+            logger.info(f" Leave application successful for empId={leave_data['empId']}!")
             
             return {"success": True, "data": result, "message": "Leave application submitted successfully"}
             
         except httpx.HTTPStatusError as e:
             logger.error("="*60)
-            logger.error(f"❌ HTTP error applying leave")
+            logger.error(f" HTTP error applying leave")
             logger.error(f"Status Code: {e.response.status_code}")
             logger.error(f"Response Body: {e.response.text}")
             logger.error("="*60)
@@ -365,7 +326,7 @@ class HRMSAPIClient:
             }
         except Exception as e:
             logger.error("="*60)
-            logger.error(f"❌ Exception applying leave: {type(e).__name__}")
+            logger.error(f" Exception applying leave: {type(e).__name__}")
             logger.error(f"Error details: {str(e)}")
             logger.error("="*60)
             return {
@@ -374,9 +335,9 @@ class HRMSAPIClient:
                 "message": f"Failed to apply leave: {str(e)}"
             }
 
-# Initialize FastMCP server and API client
+# Initialize FastMCP server and API client (without cached token)
 mcp = FastMCP("hrms-management")
-api_client = HRMSAPIClient(HRMS_API_BASE_URL, AUTH_TOKEN)
+api_client = HRMSAPIClient(HRMS_API_BASE_URL)
 
 # ==== LEAVE TOOLS ====
 
@@ -398,6 +359,7 @@ async def get_leave_history(
 ) -> Dict[str, Any]:
     """
     Get leave history based on filters. Supports natural language date queries.
+    Use this tool when user asks about leave history, who is on leave, leave status checks, etc.
     
     Parameters:
     - prompt: Natural language prompt (e.g., "who is on leave today", "show leaves for yesterday")
@@ -465,6 +427,7 @@ async def get_leave_history(
 async def get_leave_statuses() -> Dict[str, Any]:
     """
     Get all possible leave statuses in the system.
+    Use this tool when you need to know what status values are available.
     
     Returns:
     - List of leave statuses with their IDs and names
@@ -476,17 +439,13 @@ async def get_leave_statuses() -> Dict[str, Any]:
 async def get_leave_types() -> Dict[str, Any]:
     """
     Get all available leave types (e.g., Sick Leave, Casual Leave, Privilege Leave).
+    Use this tool when collecting leave type information from the user.
     
     Returns:
     - List of leave types with their IDs, names, and properties
     - Use the leave type ID when applying for leave
     
-    Note: If this tool fails due to authorization issues, you can use these common leave type IDs:
-    - 1: Casual Leave
-    - 2: Sick Leave
-    - 3: Privilege Leave / Earned Leave
-    - 4: Maternity Leave
-    - 5: Paternity Leave
+    Note: If this tool fails due to authorization issues, use get_common_leave_type_ids instead.
     """
     try:
         result = await api_client.get_leave_types()
@@ -536,10 +495,12 @@ async def get_leave_types() -> Dict[str, Any]:
 async def get_common_leave_type_ids() -> Dict[str, Any]:
     """
     Get a quick reference of common leave type IDs without making an API call.
-    Use this when you need to apply leave but get_leave_types fails or is too slow.
+    Use this when asking the user what type of leave they want to apply for.
+    This is faster than calling get_leave_types and provides consistent results.
     
     Returns:
     - Dictionary of common leave type IDs that work in most HRMS systems
+    - Use this data to present options to the user
     """
     return {
         "common_leave_types": {
@@ -586,6 +547,7 @@ async def get_common_leave_type_ids() -> Dict[str, Any]:
 async def get_leave_day_parts() -> Dict[str, Any]:
     """
     Get all possible leave day parts.
+    Use this when asking the user if they need full day or half day leave.
     
     Returns:
     - List of day parts with their IDs:
@@ -611,6 +573,7 @@ async def apply_leave(
 ) -> Dict[str, Any]:
     """
     Apply for leave. The employee ID is automatically extracted from the authentication token.
+    ONLY use this tool when ALL required information has been collected from the user.
     
     IMPORTANT - Common Leave Type IDs (use these directly):
     - 1: Casual Leave
@@ -618,6 +581,14 @@ async def apply_leave(
     - 3: Privilege Leave / Earned Leave
     - 4: Maternity Leave
     - 5: Paternity Leave
+    
+    Required Information Before Calling This Tool:
+    1. leave_type_id: The type of leave (REQUIRED)
+    2. from_date: Start date in YYYY-MM-DD format (REQUIRED)
+    3. to_date: End date in YYYY-MM-DD format (REQUIRED)
+    4. leave_reason: Reason for leave - CANNOT be empty (REQUIRED)
+    5. from_leave_day_part: Day part for start (1=First Half, 2=Second Half, 3=Full Day)
+    6. to_leave_day_part: Day part for end (1=First Half, 2=Second Half, 3=Full Day)
     
     Parameters:
     - leave_type_id: ID of the leave type (REQUIRED - use 1 for Casual Leave, 2 for Sick Leave if unsure)
@@ -633,7 +604,6 @@ async def apply_leave(
     - emergency_contact: Emergency contact number during leave (optional)
     
     Note: Employee ID (empId) is automatically extracted from your authentication token.
-    You do NOT need to call get_leave_types before applying leave.
     
     Returns:
     - Success status and leave application details
@@ -646,27 +616,32 @@ async def apply_leave(
     logger.info(f"Day parts: from={from_leave_day_part}, to={to_leave_day_part}")
     logger.info("="*60)
     
-    # Extract empId from JWT token
-    if not AUTH_TOKEN:
-        logger.error("No AUTH_TOKEN available in environment")
+    # Get FRESH auth token for THIS request
+    current_token = get_current_auth_token()
+    
+    if not current_token:
+        logger.error(" No AUTH_TOKEN available in environment")
         return {
             "success": False,
             "error": "No authentication token available",
             "message": "Server configuration error: No authentication token"
         }
     
-    logger.info(f"Attempting to extract empId from token (token length: {len(AUTH_TOKEN)})")
-    emp_id = JWTHelper.get_emp_id_from_token(AUTH_TOKEN)
+    logger.info(f" Current token length: {len(current_token)}")
+    logger.info(f" Token first 30 chars: {current_token[:30]}...")
+    
+    # Extract empId from the FRESH token
+    emp_id = JWTHelper.get_emp_id_from_token(current_token)
     
     if not emp_id:
-        logger.error("Failed to extract empId from token")
+        logger.error(" Failed to extract empId from current token")
         return {
             "success": False,
             "error": "Could not extract employee ID from authentication token",
             "message": "Authentication error: Could not extract employee ID from token"
         }
     
-    logger.info(f"✅ Successfully extracted empId={emp_id} from JWT token")
+    logger.info(f" Successfully extracted empId={emp_id} from CURRENT JWT token")
     
     # Validate required fields
     if not leave_reason or leave_reason.strip() == "":
@@ -742,77 +717,25 @@ async def apply_leave(
         "emergencyContact": emergency_contact
     }
     
-    logger.info(f"📤 Sending leave application for empId={emp_id}")
-    logger.info(f"Payload: {leave_data}")
+    logger.info(f" Sending leave application for empId={emp_id}")
+    logger.info(f" Full Payload: {leave_data}")
     
     result = await api_client.apply_leave(leave_data)
     
     if result.get("success"):
-        logger.info(f"✅ Leave application successful for empId={emp_id}")
+        logger.info(f" Leave application successful for empId={emp_id}")
     else:
-        logger.error(f"❌ Leave application failed: {result.get('error')}")
+        logger.error(f" Leave application failed for empId={emp_id}: {result.get('error')}")
     
     return result
-
-# ==== HOLIDAY TOOLS ====
-
-@mcp.tool()
-async def get_holidays(
-    holiday_type_filter: Optional[str] = None,
-    year: Optional[int] = None,
-    from_date: Optional[str] = None,
-    to_date: Optional[str] = None
-) -> Dict[str, Any]:
-    """
-    Get holidays based on filters.
-    
-    Parameters:
-    - holiday_type_filter: Filter by holiday type
-    - year: Filter by year
-    - from_date: Start date filter (format: YYYY-MM-DD)
-    - to_date: End date filter (format: YYYY-MM-DD)
-    
-    Returns:
-    - Collection of holidays matching the filters
-    """
-    return await api_client.get_holidays(
-        holiday_type_filter=holiday_type_filter,
-        year=year,
-        from_date=from_date,
-        to_date=to_date
-    )
-
-# ==== COMPANY TOOLS ====
-
-@mcp.tool()
-async def get_company(
-    company_id: Optional[str] = None,
-    page_no: int = 1,
-    page_size: int = 10
-) -> Dict[str, Any]:
-    """
-    Get company information.
-    
-    Parameters:
-    - company_id: Optional company UUID. If provided, gets specific company info
-    - page_no: Page number for pagination (default: 1)
-    - page_size: Number of records per page (default: 10)
-    
-    Returns:
-    - Company information or list of companies
-    """
-    return await api_client.get_company(
-        company_id=company_id,
-        page_no=page_no,
-        page_size=page_size
-    )
 
 # The transport="stdio" argument tells the server to use standard input/output 
 # to receive and respond to tool function calls
 if __name__ == "__main__":
     logger.info("Starting HRMS MCP Server...")
-    if AUTH_TOKEN:
-        logger.info("Auth token received from main.py and loaded successfully")
+    current_token = get_current_auth_token()
+    if current_token:
+        logger.info(f"Auth token present at startup (length: {len(current_token)})")
     else:
-        logger.info("MCP server started - auth token will be provided by main.py via environment")
+        logger.info("No auth token at startup - will be read fresh on each request")
     mcp.run(transport="stdio")
