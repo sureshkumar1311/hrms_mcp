@@ -1,7 +1,7 @@
 import os
 import asyncio
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 import jwt
 import re
@@ -19,7 +19,6 @@ logger = logging.getLogger("hrms-mcp-server")
 # Configuration
 HRMS_API_BASE_URL = "https://portalapi.kryptosinfosys.com"
 
-# DON'T cache AUTH_TOKEN at module level - read it fresh each time
 def get_current_auth_token() -> str:
     """Get the current auth token from environment - read fresh each time"""
     token = os.getenv("HRMS_AUTH_TOKEN", "")
@@ -32,14 +31,10 @@ class JWTHelper:
     
     @staticmethod
     def decode_token(token: str) -> Dict[str, Any]:
-        """
-        Decode JWT token without verification (for extracting empId)
-        Note: In production, you should verify the token signature
-        """
+        """Decode JWT token without verification"""
         try:
             payload = jwt.decode(token, options={"verify_signature": False})
             logger.info(f"Decoded JWT payload keys: {list(payload.keys())}")
-            # Log the uid specifically for debugging
             if 'uid' in payload:
                 logger.info(f"Found uid in token: {payload['uid']}")
             return payload
@@ -49,145 +44,29 @@ class JWTHelper:
     
     @staticmethod
     def get_emp_id_from_token(token: str) -> Optional[int]:
-        """Extract empId from JWT token"""
+        """Extract empId from JWT token - looks for 'uid' field"""
         if not token:
             logger.error("No token provided to get_emp_id_from_token")
             return None
             
-        logger.info(f"Extracting empId from token (length: {len(token)}, first 20: {token[:20]}...)")
+        logger.info(f"Extracting empId from token (length: {len(token)})")
         
         decoded = JWTHelper.decode_token(token)
         if decoded:
-            # Try different common field names for employee ID
-            # NOTE: 'uid' is checked first as it's the field used in this HRMS system
-            for key in ['uid', 'empId', 'emp_id', 'employeeId', 'employee_id', 'sub', 'userId', 'user_id', 'id', 'user', 'EmployeeId']:
+            # Check 'uid' field first as per your HRMS system
+            for key in ['uid', 'empId', 'emp_id', 'employeeId', 'employee_id', 'sub', 'userId', 'user_id', 'id']:
                 if key in decoded:
                     try:
                         emp_id = int(decoded[key])
-                        logger.info(f" Successfully extracted empId={emp_id} from JWT token field '{key}'")
-                        logger.info(f"Token also contains: uname={decoded.get('uname', 'N/A')}, email={decoded.get('email', 'N/A')}")
+                        logger.info(f" Successfully extracted empId={emp_id} from JWT field '{key}'")
                         return emp_id
                     except (ValueError, TypeError) as e:
-                        logger.warning(f"Found key '{key}' but couldn't convert to int: {decoded[key]}, error: {e}")
+                        logger.warning(f"Found key '{key}' but couldn't convert to int: {decoded[key]}")
                         continue
             logger.error(f" Could not find empId in token. Available keys: {list(decoded.keys())}")
-            logger.error(f"Token payload: {decoded}")
         else:
             logger.error(" Token decoding returned empty dict")
         return None
-
-class DateParser:
-    """Helper class to parse natural language dates"""
-    
-    @staticmethod
-    def parse_date_from_text(text: str, reference_date: Optional[datetime] = None) -> Optional[str]:
-        """
-        Parse natural language date expressions and return ISO format date string
-        
-        Args:
-            text: Natural language date text (e.g., "today", "yesterday", "tomorrow", "2025-12-28")
-            reference_date: Reference date for relative calculations (defaults to today)
-        
-        Returns:
-            ISO format date string (YYYY-MM-DD) or None if parsing fails
-        """
-        if not text:
-            return None
-            
-        text = text.lower().strip()
-        
-        # Use current date as reference if not provided
-        if reference_date is None:
-            reference_date = datetime.now()
-        
-        # Check for explicit date format (YYYY-MM-DD)
-        date_pattern = r'\d{4}-\d{2}-\d{2}'
-        date_match = re.search(date_pattern, text)
-        if date_match:
-            return date_match.group(0)
-        
-        # Handle relative dates
-        if text == "today":
-            return reference_date.strftime("%Y-%m-%d")
-        elif text == "yesterday":
-            return (reference_date - timedelta(days=1)).strftime("%Y-%m-%d")
-        elif text == "tomorrow":
-            return (reference_date + timedelta(days=1)).strftime("%Y-%m-%d")
-        elif "last week" in text:
-            return (reference_date - timedelta(weeks=1)).strftime("%Y-%m-%d")
-        elif "next week" in text:
-            return (reference_date + timedelta(weeks=1)).strftime("%Y-%m-%d")
-        elif "days ago" in text:
-            # Extract number of days
-            match = re.search(r'(\d+)\s*days?\s+ago', text)
-            if match:
-                days = int(match.group(1))
-                return (reference_date - timedelta(days=days)).strftime("%Y-%m-%d")
-        elif "days from now" in text or "days later" in text:
-            # Extract number of days
-            match = re.search(r'(\d+)\s*days?', text)
-            if match:
-                days = int(match.group(1))
-                return (reference_date + timedelta(days=days)).strftime("%Y-%m-%d")
-        
-        # If no pattern matched, return None
-        return None
-    
-    @staticmethod
-    def extract_dates_from_prompt(prompt: str) -> Dict[str, Optional[str]]:
-        """
-        Extract fromDate and toDate from user prompt
-        
-        Returns:
-            Dict with 'from_date' and 'to_date' keys
-        """
-        prompt_lower = prompt.lower()
-        result = {"from_date": None, "to_date": None}
-        
-        # Look for explicit date ranges
-        # Pattern: "from YYYY-MM-DD to YYYY-MM-DD"
-        range_pattern = r'from\s+(\d{4}-\d{2}-\d{2})\s+to\s+(\d{4}-\d{2}-\d{2})'
-        range_match = re.search(range_pattern, prompt_lower)
-        if range_match:
-            result["from_date"] = range_match.group(1)
-            result["to_date"] = range_match.group(2)
-            return result
-        
-        # Check for single date expressions
-        if "today" in prompt_lower:
-            today = datetime.now().strftime("%Y-%m-%d")
-            result["from_date"] = today
-            result["to_date"] = today
-        elif "yesterday" in prompt_lower:
-            yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-            result["from_date"] = yesterday
-            result["to_date"] = yesterday
-        elif "tomorrow" in prompt_lower:
-            tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-            result["from_date"] = tomorrow
-            result["to_date"] = tomorrow
-        elif "this week" in prompt_lower:
-            today = datetime.now()
-            start_of_week = today - timedelta(days=today.weekday())
-            end_of_week = start_of_week + timedelta(days=6)
-            result["from_date"] = start_of_week.strftime("%Y-%m-%d")
-            result["to_date"] = end_of_week.strftime("%Y-%m-%d")
-        elif "last week" in prompt_lower:
-            today = datetime.now()
-            start_of_last_week = today - timedelta(days=today.weekday() + 7)
-            end_of_last_week = start_of_last_week + timedelta(days=6)
-            result["from_date"] = start_of_last_week.strftime("%Y-%m-%d")
-            result["to_date"] = end_of_last_week.strftime("%Y-%m-%d")
-        else:
-            # Try to extract any YYYY-MM-DD dates
-            date_pattern = r'\d{4}-\d{2}-\d{2}'
-            dates = re.findall(date_pattern, prompt_lower)
-            if dates:
-                result["from_date"] = dates[0]
-                if len(dates) > 1:
-                    result["to_date"] = dates[1]
-        
-        return result
 
 class HRMSAPIClient:
     """Client to interact with the HRMS APIs"""
@@ -195,7 +74,7 @@ class HRMSAPIClient:
     def __init__(self, base_url: str):
         self.base_url = base_url
         self.client = httpx.AsyncClient(timeout=30.0)
-        logger.info(f"HRMSAPIClient initialized")
+        logger.info(f"HRMSAPIClient initialized with base URL: {base_url}")
     
     def _get_headers(self, auth_token: str = None) -> Dict[str, str]:
         """Get headers with fresh auth token"""
@@ -207,22 +86,35 @@ class HRMSAPIClient:
             headers["Authorization"] = f"Bearer {auth_token}"
             logger.info(f"Using auth token (first 20 chars): {auth_token[:20]}...")
         else:
-            logger.warning("No auth token available for headers")
+            logger.warning(" No auth token available for headers")
         return headers
     
     async def get_leave_history(self, payload: Dict[str, Any]):
         """Get leave history using POST request with payload"""
         try:
-            logger.info(f"Fetching leave history with payload: {payload}")
+            logger.info(f" Fetching leave history with payload: {json.dumps(payload, indent=2)}")
             response = await self.client.post(
                 f"{self.base_url}/api/Leave/history",
                 json=payload,
                 headers=self._get_headers()
             )
+            
+            logger.info(f"Leave history API response status: {response.status_code}")
+            
+            if response.status_code == 401:
+                logger.error(" 401 Unauthorized - Auth token invalid")
+                return {"error": "Unauthorized", "status_code": 401}
+            
             response.raise_for_status()
-            return response.json()
+            result = response.json()
+            logger.info(f" Leave history fetched successfully. Records: {len(result.get('data', []))}")
+            return result
+        except httpx.HTTPStatusError as e:
+            logger.error(f" HTTP error fetching leave history: {e.response.status_code}")
+            logger.error(f"Response body: {e.response.text}")
+            return {"error": f"HTTP {e.response.status_code}", "details": e.response.text}
         except Exception as e:
-            logger.error(f"Error fetching leave history: {e}")
+            logger.error(f" Error fetching leave history: {e}")
             return {"error": str(e)}
     
     async def get_leave_statuses(self):
@@ -235,35 +127,37 @@ class HRMSAPIClient:
             logger.info(f"Leave statuses response status: {response.status_code}")
             
             if response.status_code == 401:
-                logger.error("401 Unauthorized - Auth token may be invalid or expired")
-                return {
-                    "error": "Unauthorized - Authentication token is invalid or expired",
-                    "status_code": 401
-                }
+                logger.error("401 Unauthorized")
+                return {"error": "Unauthorized", "status_code": 401}
             
             response.raise_for_status()
             result = response.json()
-            logger.info(f"Successfully fetched leave statuses")
+            logger.info(f" Leave statuses fetched successfully")
             return result
         except Exception as e:
             logger.error(f"Error fetching leave statuses: {e}")
             return {"error": str(e)}
     
     async def get_leave_types(self):
-        """Get all leave types"""
+        """Get all leave types from API"""
         try:
+            logger.info(" Fetching leave types from API...")
             response = await self.client.get(
                 f"{self.base_url}/api/LeaveTypes",
                 headers=self._get_headers()
             )
             logger.info(f"Leave types response status: {response.status_code}")
             
+            if response.status_code == 401:
+                logger.error(" 401 Unauthorized")
+                return {"error": "Unauthorized", "status_code": 401}
+            
             response.raise_for_status()
             result = response.json()
-            logger.info(f"Leave types fetched successfully")
-            return result
+            logger.info(f" Leave types fetched successfully: {len(result) if isinstance(result, list) else 'N/A'} types")
+            return {"leave_types": result, "success": True}
         except Exception as e:
-            logger.error(f"Error fetching leave types: {e}")
+            logger.error(f" Error fetching leave types: {e}")
             return {"error": str(e)}
     
     async def get_leave_day_parts(self):
@@ -279,22 +173,17 @@ class HRMSAPIClient:
             logger.error(f"Error fetching leave day parts: {e}")
             return {"error": str(e)}
     
-    
     async def apply_leave(self, leave_data: Dict[str, Any]):
-        """Apply for leave with the new API structure"""
+        """Apply for leave with proper payload structure"""
         try:
-            # Get fresh token for this request
             current_token = get_current_auth_token()
             
-            logger.info("="*60)
-            logger.info("API CLIENT: Applying leave")
+            logger.info("="*80)
+            logger.info(" API CLIENT: Applying leave")
             logger.info(f"URL: {self.base_url}/api/Leave/apply")
-            logger.info(f"Payload: {leave_data}")
+            logger.info(f"Payload: {json.dumps(leave_data, indent=2)}")
             logger.info(f"Auth token present: {bool(current_token)}")
-            if current_token:
-                logger.info(f"Auth token (first 30 chars): {current_token[:30]}...")
-                logger.info(f"Auth token (last 20 chars): ...{current_token[-20:]}")
-            logger.info("="*60)
+            logger.info("="*80)
             
             response = await self.client.post(
                 f"{self.base_url}/api/Leave/apply",
@@ -305,6 +194,14 @@ class HRMSAPIClient:
             logger.info(f"API Response Status: {response.status_code}")
             logger.info(f"API Response Body: {response.text}")
             
+            if response.status_code == 401:
+                logger.error(" 401 Unauthorized - Token invalid")
+                return {
+                    "success": False,
+                    "error": "Unauthorized",
+                    "message": "Authentication token is invalid or expired"
+                }
+            
             response.raise_for_status()
             result = response.json()
             
@@ -313,244 +210,129 @@ class HRMSAPIClient:
             return {"success": True, "data": result, "message": "Leave application submitted successfully"}
             
         except httpx.HTTPStatusError as e:
-            logger.error("="*60)
+            logger.error("="*80)
             logger.error(f" HTTP error applying leave")
             logger.error(f"Status Code: {e.response.status_code}")
             logger.error(f"Response Body: {e.response.text}")
-            logger.error("="*60)
+            logger.error("="*80)
             return {
                 "success": False,
-                "error": f"HTTP {e.response.status_code}: {e.response.text}",
-                "status_code": e.response.status_code,
+                "error": f"HTTP {e.response.status_code}",
+                "details": e.response.text,
                 "message": f"Failed to apply leave. Status: {e.response.status_code}"
             }
         except Exception as e:
-            logger.error("="*60)
+            logger.error("="*80)
             logger.error(f" Exception applying leave: {type(e).__name__}")
             logger.error(f"Error details: {str(e)}")
-            logger.error("="*60)
+            logger.error("="*80)
             return {
                 "success": False,
                 "error": str(e),
                 "message": f"Failed to apply leave: {str(e)}"
             }
 
-# Initialize FastMCP server and API client (without cached token)
+# Initialize FastMCP server and API client
 mcp = FastMCP("hrms-management")
 api_client = HRMSAPIClient(HRMS_API_BASE_URL)
+
+# Import json for logging
+import json
 
 # ==== LEAVE TOOLS ====
 
 @mcp.tool()
 async def get_leave_history(
-    prompt: str = "",
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
     emp_id: Optional[int] = None,
-    reporting_manager_id: Optional[int] = None,
     status: Optional[int] = None,
     page_number: int = 1,
-    page_size: int = 10,
-    sort_order: Optional[str] = None,
-    sort_by: Optional[str] = None,
-    search_term: Optional[str] = None,
-    company_id: Optional[int] = None,
-    branch_id: Optional[int] = None,
-    from_date: Optional[str] = None,
-    to_date: Optional[str] = None
+    page_size: int = 10
 ) -> Dict[str, Any]:
     """
-    Get leave history based on filters. Supports natural language date queries.
-    Use this tool when user asks about leave history, who is on leave, leave status checks, etc.
+    Get leave history based on filters.
     
     Parameters:
-    - prompt: Natural language prompt (e.g., "who is on leave today", "show leaves for yesterday")
-    - emp_id: Employee ID (null to get all employees' leaves)
-    - reporting_manager_id: Filter by reporting manager
-    - status: Leave status filter (null for all statuses)
-    - page_number: Page number for pagination (default: 1)
-    - page_size: Number of records per page (default: 10, can be adjusted based on prompt)
-    - sort_order: Sort order (e.g., "asc" or "desc")
-    - sort_by: Field to sort by
-    - search_term: Search term to filter results
-    - company_id: Company ID filter
-    - branch_id: Branch ID filter
-    - from_date: Start date filter (YYYY-MM-DD format, auto-calculated from prompt if not provided)
-    - to_date: End date filter (YYYY-MM-DD format, auto-calculated from prompt if not provided)
-    
-    Examples:
-    - "Who is on leave today?" -> fromDate = today, toDate = today
-    - "Show leaves for yesterday" -> fromDate = yesterday, toDate = yesterday
-    - "Who will be on leave tomorrow?" -> fromDate = tomorrow, toDate = tomorrow
-    - "Show me 20 leave records" -> pageSize = 20
+    - from_date: Start date (YYYY-MM-DD format). Defaults to today if not provided.
+    - to_date: End date (YYYY-MM-DD format). Optional.
+    - emp_id: Employee ID filter. Null to get all employees.
+    - status: Leave status filter. Null for all statuses.
+    - page_number: Page number (default: 1)
+    - page_size: Records per page (default: 10)
     
     Returns:
-    - Paginated leave history matching the filters
+    - Paginated leave history
     """
-    
-    # If prompt is provided, try to extract dates and page size
-    if prompt:
-        # Extract dates from prompt
-        dates = DateParser.extract_dates_from_prompt(prompt)
-        if dates["from_date"] and not from_date:
-            from_date = dates["from_date"]
-        if dates["to_date"] and not to_date:
-            to_date = dates["to_date"]
-        
-        # Extract page size from prompt (e.g., "show me 20 records")
-        size_match = re.search(r'(\d+)\s*(record|leave|result)', prompt.lower())
-        if size_match:
-            page_size = int(size_match.group(1))
     
     # Set default from_date to today if not provided
     if not from_date:
         from_date = datetime.now().strftime("%Y-%m-%d")
     
-    # Build payload according to new API structure
+    # Build payload
     payload = {
         "empId": emp_id,
-        "reportingManagerId": reporting_manager_id,
+        "reportingManagerId": None,
         "status": status,
         "pageNumber": page_number,
         "pageSize": page_size,
-        "sortOrder": sort_order,
-        "sortBy": sort_by,
-        "searchTerm": search_term,
-        "companyId": company_id,
-        "branchId": branch_id,
+        "sortOrder": None,
+        "sortBy": None,
+        "searchTerm": None,
+        "companyId": None,
+        "branchId": None,
         "fromDate": from_date,
         "toDate": to_date
     }
     
-    logger.info(f"Getting leave history with payload: {payload}")
+    logger.info(f" Getting leave history with payload: {json.dumps(payload, indent=2)}")
     return await api_client.get_leave_history(payload)
 
 @mcp.tool()
 async def get_leave_statuses() -> Dict[str, Any]:
     """
     Get all possible leave statuses in the system.
-    Use this tool when you need to know what status values are available.
     
     Returns:
     - List of leave statuses with their IDs and names
-    - Useful for understanding what status values to use in other leave-related tools
     """
     return await api_client.get_leave_statuses()
 
 @mcp.tool()
 async def get_leave_types() -> Dict[str, Any]:
     """
-    Get all available leave types (e.g., Sick Leave, Casual Leave, Privilege Leave).
-    Use this tool when collecting leave type information from the user.
+    Get all available leave types from the HRMS API.
     
     Returns:
     - List of leave types with their IDs, names, and properties
     - Use the leave type ID when applying for leave
     
-    Note: If this tool fails due to authorization issues, use get_common_leave_type_ids instead.
+    Note: This calls the actual API to get real leave types configured in your system.
     """
-    try:
-        result = await api_client.get_leave_types()
-        
-        # Check if result is a dict with an error
-        if isinstance(result, dict) and result.get("error"):
-            logger.warning(f"get_leave_types API failed: {result.get('error')}")
-            logger.info("Returning common leave types as fallback")
-            return {
-                "fallback": True,
-                "message": "Could not fetch leave types from API. Using common leave type IDs:",
-                "common_leave_types": [
-                    {"id": 1, "name": "Casual Leave", "description": "For personal or urgent work"},
-                    {"id": 2, "name": "Sick Leave", "description": "For illness or medical reasons"},
-                    {"id": 3, "name": "Privilege Leave / Earned Leave", "description": "Annual leave earned by working"},
-                    {"id": 4, "name": "Maternity Leave", "description": "For maternity purposes"},
-                    {"id": 5, "name": "Paternity Leave", "description": "For paternity purposes"}
-                ],
-                "note": "These are common leave type IDs. You can proceed with leave application using these IDs.",
-                "original_error": result.get("error")
-            }
-        
-        # If result is a list (successful API call), return it as is
-        if isinstance(result, list):
-            return {"leave_types": result, "success": True}
-        
-        # If result is a dict without error, return it
-        return result
-        
-    except Exception as e:
-        logger.error(f"Exception in get_leave_types tool: {e}")
+    result = await api_client.get_leave_types()
+    
+    # If API call fails, return common fallback types
+    if isinstance(result, dict) and result.get("error"):
+        logger.warning(f"API failed, returning fallback leave types")
         return {
             "fallback": True,
-            "message": "Error fetching leave types. Using common leave type IDs:",
+            "message": "Using common leave types as API call failed",
             "common_leave_types": [
                 {"id": 1, "name": "Casual Leave", "description": "For personal or urgent work"},
-                {"id": 2, "name": "Sick Leave", "description": "For illness or medical reasons"},
-                {"id": 3, "name": "Privilege Leave / Earned Leave", "description": "Annual leave earned by working"},
-                {"id": 4, "name": "Maternity Leave", "description": "For maternity purposes"},
-                {"id": 5, "name": "Paternity Leave", "description": "For paternity purposes"}
+                {"id": 2, "name": "Sick Leave", "description": "For illness or medical reasons"}
             ],
-            "note": "These are common leave type IDs. You can proceed with leave application using these IDs.",
-            "error": str(e)
+            "original_error": result.get("error")
         }
-
-@mcp.tool()
-async def get_common_leave_type_ids() -> Dict[str, Any]:
-    """
-    Get a quick reference of common leave type IDs without making an API call.
-    Use this when asking the user what type of leave they want to apply for.
-    This is faster than calling get_leave_types and provides consistent results.
     
-    Returns:
-    - Dictionary of common leave type IDs that work in most HRMS systems
-    - Use this data to present options to the user
-    """
-    return {
-        "common_leave_types": {
-            "casual_leave": {
-                "id": 1,
-                "name": "Casual Leave",
-                "description": "For personal or urgent work, short-term leave",
-                "typical_usage": "Personal work, family functions, short errands"
-            },
-            "sick_leave": {
-                "id": 2,
-                "name": "Sick Leave",
-                "description": "For illness or medical reasons",
-                "typical_usage": "When feeling unwell, doctor appointments, medical treatment"
-            },
-            "privilege_leave": {
-                "id": 3,
-                "name": "Privilege Leave / Earned Leave",
-                "description": "Annual leave earned by working",
-                "typical_usage": "Vacations, long trips, extended personal time"
-            },
-            "maternity_leave": {
-                "id": 4,
-                "name": "Maternity Leave",
-                "description": "For maternity purposes",
-                "typical_usage": "Before and after childbirth"
-            },
-            "paternity_leave": {
-                "id": 5,
-                "name": "Paternity Leave",
-                "description": "For paternity purposes",
-                "typical_usage": "After childbirth to support family"
-            }
-        },
-        "usage_instructions": {
-            "casual_leave_keywords": ["casual", "personal", "urgent", "family function", "personal work"],
-            "sick_leave_keywords": ["sick", "ill", "unwell", "doctor", "medical", "health"],
-            "privilege_leave_keywords": ["vacation", "holiday", "annual", "earned", "privilege"]
-        },
-        "note": "These are typical leave type IDs. Use these when applying leave if get_leave_types fails."
-    }
+    return result
 
 @mcp.tool()
 async def get_leave_day_parts() -> Dict[str, Any]:
     """
     Get all possible leave day parts.
-    Use this when asking the user if they need full day or half day leave.
     
     Returns:
-    - List of day parts with their IDs:
+    - List of day parts:
       1: First Half
       2: Second Half
       3: Full Day
@@ -572,51 +354,39 @@ async def apply_leave(
     emergency_contact: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    Apply for leave. The employee ID is automatically extracted from the authentication token.
-    ONLY use this tool when ALL required information has been collected from the user.
+    Apply for leave. Employee ID is automatically extracted from the JWT token.
     
-    IMPORTANT - Common Leave Type IDs (use these directly):
-    - 1: Casual Leave
-    - 2: Sick Leave
-    - 3: Privilege Leave / Earned Leave
-    - 4: Maternity Leave
-    - 5: Paternity Leave
-    
-    Required Information Before Calling This Tool:
-    1. leave_type_id: The type of leave (REQUIRED)
-    2. from_date: Start date in YYYY-MM-DD format (REQUIRED)
-    3. to_date: End date in YYYY-MM-DD format (REQUIRED)
-    4. leave_reason: Reason for leave - CANNOT be empty (REQUIRED)
-    5. from_leave_day_part: Day part for start (1=First Half, 2=Second Half, 3=Full Day)
-    6. to_leave_day_part: Day part for end (1=First Half, 2=Second Half, 3=Full Day)
+    IMPORTANT: empId is extracted from the 'uid' field in your JWT token.
     
     Parameters:
-    - leave_type_id: ID of the leave type (REQUIRED - use 1 for Casual Leave, 2 for Sick Leave if unsure)
-    - from_date: Start date of leave (format: YYYY-MM-DD) (REQUIRED)
-    - to_date: End date of leave (format: YYYY-MM-DD) (REQUIRED)
+    - leave_type_id: ID of the leave type (REQUIRED)
+    - from_date: Start date (YYYY-MM-DD) (REQUIRED)
+    - to_date: End date (YYYY-MM-DD) (REQUIRED)
     - leave_reason: Reason for leave (REQUIRED - cannot be empty)
-    - from_leave_day_part: Day part for start date (1: First Half, 2: Second Half, 3: Full Day, default: 3)
-    - to_leave_day_part: Day part for end date (1: First Half, 2: Second Half, 3: Full Day, default: 3)
-    - number_of_days: Number of days (calculated automatically if not provided)
+    - from_leave_day_part: Day part for start (1=First Half, 2=Second Half, 3=Full Day, default: 3)
+    - to_leave_day_part: Day part for end (1=First Half, 2=Second Half, 3=Full Day, default: 3)
+    - number_of_days: Number of days (auto-calculated if not provided)
     - remarks: Additional remarks (optional)
-    - is_medical_leave: Whether this is medical leave (default: False)
-    - leave_document: Document URL/path if any (e.g., medical certificate) (optional)
-    - emergency_contact: Emergency contact number during leave (optional)
-    
-    Note: Employee ID (empId) is automatically extracted from your authentication token.
+    - is_medical_leave: Whether medical leave (default: False)
+    - leave_document: Document URL if any (optional)
+    - emergency_contact: Emergency contact number (optional)
     
     Returns:
     - Success status and leave application details
     """
     
-    logger.info("="*60)
-    logger.info("APPLY LEAVE TOOL CALLED")
-    logger.info(f"Parameters: leave_type_id={leave_type_id}, from_date={from_date}, to_date={to_date}")
-    logger.info(f"Leave reason: {leave_reason}")
-    logger.info(f"Day parts: from={from_leave_day_part}, to={to_leave_day_part}")
-    logger.info("="*60)
+    logger.info("="*80)
+    logger.info(" APPLY LEAVE TOOL CALLED")
+    logger.info(f"Parameters received:")
+    logger.info(f"  - leave_type_id: {leave_type_id}")
+    logger.info(f"  - from_date: {from_date}")
+    logger.info(f"  - to_date: {to_date}")
+    logger.info(f"  - leave_reason: {leave_reason}")
+    logger.info(f"  - from_leave_day_part: {from_leave_day_part}")
+    logger.info(f"  - to_leave_day_part: {to_leave_day_part}")
+    logger.info("="*80)
     
-    # Get FRESH auth token for THIS request
+    # Get FRESH auth token
     current_token = get_current_auth_token()
     
     if not current_token:
@@ -628,24 +398,23 @@ async def apply_leave(
         }
     
     logger.info(f" Current token length: {len(current_token)}")
-    logger.info(f" Token first 30 chars: {current_token[:30]}...")
     
-    # Extract empId from the FRESH token
+    # Extract empId from JWT token
     emp_id = JWTHelper.get_emp_id_from_token(current_token)
     
     if not emp_id:
-        logger.error(" Failed to extract empId from current token")
+        logger.error(" Failed to extract empId from token")
         return {
             "success": False,
             "error": "Could not extract employee ID from authentication token",
             "message": "Authentication error: Could not extract employee ID from token"
         }
     
-    logger.info(f" Successfully extracted empId={emp_id} from CURRENT JWT token")
+    logger.info(f" Successfully extracted empId={emp_id} from JWT token")
     
     # Validate required fields
     if not leave_reason or leave_reason.strip() == "":
-        logger.error("Leave reason is empty or missing")
+        logger.error(" Leave reason is empty")
         return {
             "success": False,
             "error": "Leave reason is required and cannot be empty",
@@ -660,15 +429,15 @@ async def apply_leave(
             days_diff = (end - start).days + 1
             
             # Adjust for half days
-            if from_leave_day_part != 3:  # Not full day
+            if from_leave_day_part != 3:
                 days_diff -= 0.5
-            if to_leave_day_part != 3 and from_date != to_date:  # Not full day and different dates
+            if to_leave_day_part != 3 and from_date != to_date:
                 days_diff -= 0.5
             
-            number_of_days = max(0.5, days_diff)  # Minimum 0.5 days
-            logger.info(f"Calculated number_of_days: {number_of_days}")
+            number_of_days = max(0.5, days_diff)
+            logger.info(f" Calculated number_of_days: {number_of_days}")
         except ValueError as e:
-            logger.error(f"Date parsing error: {e}")
+            logger.error(f" Date parsing error: {e}")
             return {
                 "success": False,
                 "error": f"Invalid date format: {str(e)}",
@@ -677,31 +446,14 @@ async def apply_leave(
     
     # Validate number_of_days
     if number_of_days < 0.5 or number_of_days > 365:
-        logger.error(f"Invalid number_of_days: {number_of_days}")
+        logger.error(f" Invalid number_of_days: {number_of_days}")
         return {
             "success": False,
             "error": f"Number of days must be between 0.5 and 365. Got: {number_of_days}",
             "message": f"Validation error: Invalid number of days ({number_of_days})"
         }
     
-    # Validate day parts
-    if from_leave_day_part not in [1, 2, 3]:
-        logger.error(f"Invalid from_leave_day_part: {from_leave_day_part}")
-        return {
-            "success": False,
-            "error": f"from_leave_day_part must be 1, 2, or 3. Got: {from_leave_day_part}",
-            "message": "Validation error: Invalid day part value"
-        }
-    
-    if to_leave_day_part not in [1, 2, 3]:
-        logger.error(f"Invalid to_leave_day_part: {to_leave_day_part}")
-        return {
-            "success": False,
-            "error": f"to_leave_day_part must be 1, 2, or 3. Got: {to_leave_day_part}",
-            "message": "Validation error: Invalid day part value"
-        }
-    
-    # Build leave application payload according to API structure
+    # Build leave application payload
     leave_data = {
         "empId": emp_id,
         "leaveTypeId": leave_type_id,
@@ -717,8 +469,8 @@ async def apply_leave(
         "emergencyContact": emergency_contact
     }
     
-    logger.info(f" Sending leave application for empId={emp_id}")
-    logger.info(f" Full Payload: {leave_data}")
+    logger.info(f"📤 Sending leave application for empId={emp_id}")
+    logger.info(f"Full Payload: {json.dumps(leave_data, indent=2)}")
     
     result = await api_client.apply_leave(leave_data)
     
@@ -729,13 +481,17 @@ async def apply_leave(
     
     return result
 
-# The transport="stdio" argument tells the server to use standard input/output 
-# to receive and respond to tool function calls
 if __name__ == "__main__":
-    logger.info("Starting HRMS MCP Server...")
+    logger.info(" Starting HRMS MCP Server...")
     current_token = get_current_auth_token()
     if current_token:
-        logger.info(f"Auth token present at startup (length: {len(current_token)})")
+        logger.info(f" Auth token present at startup (length: {len(current_token)})")
+        # Try to decode to verify
+        emp_id = JWTHelper.get_emp_id_from_token(current_token)
+        if emp_id:
+            logger.info(f" Token is valid. Employee ID: {emp_id}")
+        else:
+            logger.warning(" Could not extract employee ID from token")
     else:
-        logger.info("No auth token at startup - will be read fresh on each request")
+        logger.warning(" No auth token at startup - will be read fresh on each request")
     mcp.run(transport="stdio")
