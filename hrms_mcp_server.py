@@ -298,6 +298,8 @@ async def get_leave_statuses() -> Dict[str, Any]:
     """
     return await api_client.get_leave_statuses()
 
+# Replace the get_leave_types tool with this:
+
 @mcp.tool()
 async def get_leave_types() -> Dict[str, Any]:
     """
@@ -305,26 +307,64 @@ async def get_leave_types() -> Dict[str, Any]:
     
     Returns:
     - List of leave types with their IDs, names, and properties
-    - Use the leave type ID when applying for leave
+    - Each leave type includes: leaveTypeId, leaveTypeName, shortCode, isPaidLeave, isActive
     
-    Note: This calls the actual API to get real leave types configured in your system.
+    Available leave types in the system:
+    - Casual Leave (ID: 1)
+    - Sick Leave (ID: 2)
+    - Compensatory Off (ID: 4)
+    - Loss Of Pay Leave (ID: 5)
+    - Maternity Leave (ID: 6)
+    - Marriage Leave (ID: 7)
     """
-    result = await api_client.get_leave_types()
-    
-    # If API call fails, return common fallback types
-    if isinstance(result, dict) and result.get("error"):
-        logger.warning(f"API failed, returning fallback leave types")
+    try:
+        result = await api_client.get_leave_types()
+        
+        # Check if result is a dict with an error
+        if isinstance(result, dict) and result.get("error"):
+            logger.warning(f"get_leave_types API failed: {result.get('error')}")
+            logger.info("Returning fallback leave types")
+            return {
+                "fallback": True,
+                "message": "Could not fetch leave types from API. Using common leave type IDs:",
+                "leave_types": [
+                    {"leaveTypeId": 1, "leaveTypeName": "Casual Leave", "shortCode": "CL", "isPaidLeave": True},
+                    {"leaveTypeId": 2, "leaveTypeName": "Sick Leave", "shortCode": "SL", "isPaidLeave": True},
+                    {"leaveTypeId": 4, "leaveTypeName": "Compensatory Off", "shortCode": "COMP", "isPaidLeave": True},
+                    {"leaveTypeId": 5, "leaveTypeName": "Loss Of Pay Leave", "shortCode": "LOP", "isPaidLeave": False},
+                    {"leaveTypeId": 6, "leaveTypeName": "Maternity Leave", "shortCode": "ML", "isPaidLeave": True},
+                    {"leaveTypeId": 7, "leaveTypeName": "Marriage Leave", "shortCode": "MLEA", "isPaidLeave": True}
+                ],
+                "note": "These are the leave types configured in your system.",
+                "original_error": result.get("error")
+            }
+        
+        # If result is a list (successful API call), return it properly formatted
+        if isinstance(result, list):
+            return {
+                "success": True,
+                "leave_types": result,
+                "message": f"Found {len(result)} active leave types"
+            }
+        
+        # If result is a dict without error, return it
+        return result
+        
+    except Exception as e:
+        logger.error(f"Exception in get_leave_types tool: {e}")
         return {
             "fallback": True,
-            "message": "Using common leave types as API call failed",
-            "common_leave_types": [
-                {"id": 1, "name": "Casual Leave", "description": "For personal or urgent work"},
-                {"id": 2, "name": "Sick Leave", "description": "For illness or medical reasons"}
+            "message": "Error fetching leave types. Using system leave types:",
+            "leave_types": [
+                {"leaveTypeId": 1, "leaveTypeName": "Casual Leave", "shortCode": "CL", "isPaidLeave": True},
+                {"leaveTypeId": 2, "leaveTypeName": "Sick Leave", "shortCode": "SL", "isPaidLeave": True},
+                {"leaveTypeId": 4, "leaveTypeName": "Compensatory Off", "shortCode": "COMP", "isPaidLeave": True},
+                {"leaveTypeId": 5, "leaveTypeName": "Loss Of Pay Leave", "shortCode": "LOP", "isPaidLeave": False},
+                {"leaveTypeId": 6, "leaveTypeName": "Maternity Leave", "shortCode": "ML", "isPaidLeave": True},
+                {"leaveTypeId": 7, "leaveTypeName": "Marriage Leave", "shortCode": "MLEA", "isPaidLeave": True}
             ],
-            "original_error": result.get("error")
+            "error": str(e)
         }
-    
-    return result
 
 @mcp.tool()
 async def get_leave_day_parts() -> Dict[str, Any]:

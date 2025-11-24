@@ -103,16 +103,16 @@ class MCPServerManager:
             if self.mcp_process.poll() is None:
                 self.is_running = True
                 self.current_auth_token = auth_token
-                logger.info(f"✅ MCP server started successfully with PID: {self.mcp_process.pid}")
+                logger.info(f" MCP server started successfully with PID: {self.mcp_process.pid}")
                 return True
             else:
                 stderr_output = self.mcp_process.stderr.read() if self.mcp_process.stderr else b""
-                logger.error(f"❌ MCP server process terminated immediately")
+                logger.error(f" MCP server process terminated immediately")
                 logger.error(f"stderr: {stderr_output.decode()}")
                 return False
                 
         except Exception as e:
-            logger.error(f"❌ Failed to start MCP server: {e}")
+            logger.error(f" Failed to start MCP server: {e}")
             import traceback
             logger.error(traceback.format_exc())
             return False
@@ -151,7 +151,7 @@ class ChatService:
 You have access to several tools to help users:
 - apply_leave: Apply for leave (requires leave_type_id, from_date, to_date, leave_reason)
 - get_leave_history: Check leave history and who is on leave
-- get_leave_types: Get available leave types
+- get_leave_types: Get available leave types from the system
 - get_leave_statuses: Get leave status options
 - get_holidays: Check company holidays
 
@@ -159,12 +159,33 @@ You have access to several tools to help users:
 1. **Be conversational and natural** - Have a friendly, helpful conversation with users
 2. **Ask clarifying questions** - If information is missing, ask the user naturally
 3. **Use tools intelligently** - Call the appropriate tool when you have enough information
-4. **Handle context switches** - If user changes topic mid-conversation (e.g., from applying leave to checking history), switch context immediately
+4. **Handle context switches** - If user changes topic mid-conversation, switch context immediately
 5. **Parse dates flexibly** - Understand "today", "tomorrow", "December 29", "29th Dec", etc.
-6. **Common leave types**:
-   - Leave Type ID 1 = Casual Leave (for personal work)
-   - Leave Type ID 2 = Sick Leave (for medical reasons)
-   - Leave Type ID 3 = Privilege Leave (for vacations)
+
+**Leave Types in System:**
+When user wants to apply leave, FIRST call get_leave_types tool to fetch available leave types, then show them as follow-up options.
+Common leave types:
+- Casual Leave (ID: 1) - for personal work
+- Sick Leave (ID: 2) - for medical reasons  
+- Compensatory Off (ID: 4) - for overtime compensation
+- Loss Of Pay Leave (ID: 5) - unpaid leave
+- Maternity Leave (ID: 6) - for maternity
+- Marriage Leave (ID: 7) - for marriage
+
+**CRITICAL - Leave Application Flow:**
+1. When user wants to apply leave, FIRST call get_leave_types to get available types
+2. Ask for leave type and show as follow-up buttons
+3. Ask for date(s)
+4. Ask for reason
+5. **CONFIRMATION STEP - MANDATORY**: Before calling apply_leave tool, show a summary and ask for confirmation:
+   "Please confirm your leave application:
+   - Leave Type: [type]
+   - Date: [date]
+   - Reason: [reason]
+   
+   Would you like to proceed?
+   [FOLLOW_UP: ["Yes, Apply", "No, Cancel"]]"
+6. ONLY call apply_leave tool after user confirms with "Yes" or similar confirmation
 
 **CRITICAL - Follow-up Suggestions:**
 At the end of your response, provide follow-up button suggestions when appropriate. Use this EXACT format:
@@ -172,36 +193,49 @@ At the end of your response, provide follow-up button suggestions when appropria
 [FOLLOW_UP: ["option1", "option2", "option3"]]
 
 **When to provide follow-up suggestions:**
-1. **Leave Type Question** - Always provide: [FOLLOW_UP: ["Casual Leave", "Sick Leave", "Privilege Leave"]]
+1. **Leave Type Question** - ALWAYS call get_leave_types first, then provide leave type names as follow-ups
+   Example: [FOLLOW_UP: ["Casual Leave", "Sick Leave", "Compensatory Off", "Marriage Leave"]]
 2. **Reason Question** - Always provide: [FOLLOW_UP: ["Personal", "Medical", "Travel", "Other"]]
 3. **Date Question (near future)** - Only if asking about today/tomorrow: [FOLLOW_UP: ["Today", "Tomorrow"]]
-4. **Date Question (any date)** - DO NOT provide follow-up (user might pick far future date)
-5. **Open-ended questions** - DO NOT provide follow-up
-6. **After tool execution** - Usually NO follow-up needed
+4. **Confirmation Question** - ALWAYS provide: [FOLLOW_UP: ["Yes, Apply", "No, Cancel"]]
+5. **Date Question (any date)** - DO NOT provide follow-up
+6. **Open-ended questions** - DO NOT provide follow-up
+7. **After tool execution** - Usually NO follow-up needed
 
 **Examples:**
 
 Q: User says "I want to apply leave"
-A: "I'll help you apply for leave. What type of leave would you like to apply for?
-[FOLLOW_UP: ["Casual Leave", "Sick Leave", "Privilege Leave"]]"
+A: [Calls get_leave_types tool first]
+"I'll help you apply for leave. What type of leave would you like to apply for?
+[FOLLOW_UP: ["Casual Leave", "Sick Leave", "Compensatory Off", "Marriage Leave"]]"
 
 Q: User says "Casual Leave"
-A: "Great! When would you like to take Casual Leave? Please provide the date (e.g., today, tomorrow, or a specific date like December 29).
+A: "Great! When would you like to take Casual Leave?
 [FOLLOW_UP: ["Today", "Tomorrow"]]"
 
 Q: User says "December 29"
-A: "Perfect! Leave on December 29th. What's the reason for your leave?
+A: "Perfect! What's the reason for your leave?
 [FOLLOW_UP: ["Personal", "Medical", "Travel", "Other"]]"
 
 Q: User says "Personal"
-A: [Applies leave and confirms] "Your leave application has been submitted successfully!"
+A: "Please confirm your leave application:
+- Leave Type: Casual Leave
+- Date: December 29, 2025
+- Reason: Personal
+
+Would you like to proceed?
+[FOLLOW_UP: ["Yes, Apply", "No, Cancel"]]"
+
+Q: User says "Yes, Apply" or "Yes"
+A: [Calls apply_leave tool] "Your leave application has been submitted successfully!"
 [NO FOLLOW_UP]
 
 **Important Rules:**
+- ALWAYS call get_leave_types when starting leave application flow
+- ALWAYS confirm before applying leave - show summary and ask "Would you like to proceed?"
+- ONLY call apply_leave after user confirms
 - ALWAYS include [FOLLOW_UP: ...] at the end when suggesting options
 - ONLY provide follow-ups for FIXED/LIMITED options
-- DO NOT provide follow-ups for open-ended questions
-- If unsure, don't provide follow-up
 - The follow-up should be on a new line at the very end
 
 **Date Handling:**
@@ -224,10 +258,10 @@ A: [Applies leave and confirms] "Your leave application has been submitted succe
                 )
                 
                 test_response = await self.azure_openai_client.ainvoke([{"role": "user", "content": "Hello"}])
-                logger.info("✅ Azure OpenAI connection test successful")
+                logger.info(" Azure OpenAI connection test successful")
                 
             except Exception as e:
-                logger.error(f"❌ Azure OpenAI connection test failed: {e}")
+                logger.error(f" Azure OpenAI connection test failed: {e}")
                 raise Exception(f"Azure OpenAI authentication failed: {e}")
     
     async def initialize_with_token(self, auth_token: str):
@@ -272,7 +306,7 @@ A: [Applies leave and confirms] "Your leave application has been submitted succe
                 # Get tools from MCP server
                 tools = await self.mcp_client.get_tools()
                 self.available_tools = tools
-                logger.info(f"✅ Loaded {len(tools)} tools: {[tool.name for tool in tools]}")
+                logger.info(f" Loaded {len(tools)} tools: {[tool.name for tool in tools]}")
                 
                 # Create agent with system prompt
                 logger.info("Creating LangGraph agent...")
@@ -282,10 +316,10 @@ A: [Applies leave and confirms] "Your leave application has been submitted succe
                 )
                 
                 self._initialized = True
-                logger.info("✅ Chat service initialized successfully")
+                logger.info(" Chat service initialized successfully")
             
         except Exception as e:
-            logger.error(f"❌ Error initializing chat service: {e}")
+            logger.error(f" Error initializing chat service: {e}")
             import traceback
             logger.error(traceback.format_exc())
             self.server_manager.cleanup()
@@ -317,10 +351,10 @@ A: [Applies leave and confirms] "Your leave application has been submitted succe
                 # Remove the follow-up marker from response text
                 clean_response = re.sub(pattern, '', response_text, flags=re.IGNORECASE | re.DOTALL).strip()
                 
-                logger.info(f"✅ Parsed follow-ups: {follow_ups}")
+                logger.info(f" Parsed follow-ups: {follow_ups}")
                 return clean_response, follow_ups
             except json.JSONDecodeError as e:
-                logger.error(f"❌ Failed to parse follow-ups JSON: {e}")
+                logger.error(f" Failed to parse follow-ups JSON: {e}")
                 return response_text, None
         
         return response_text, None
@@ -352,8 +386,8 @@ A: [Applies leave and confirms] "Your leave application has been submitted succe
             # Add current user message
             messages.append({"role": "user", "content": message})
             
-            logger.info(f"💬 User message: {message}")
-            logger.info(f"📚 Conversation history length: {len(conversation_history)}")
+            logger.info(f" User message: {message}")
+            logger.info(f" Conversation history length: {len(conversation_history)}")
             
             # Let the agent handle everything
             response = await self.agent.ainvoke({"messages": messages})
@@ -361,13 +395,13 @@ A: [Applies leave and confirms] "Your leave application has been submitted succe
             # Extract assistant's response
             assistant_message = response['messages'][-1].content
             
-            logger.info(f"🤖 Assistant raw response: {assistant_message}")
+            logger.info(f" Assistant raw response: {assistant_message}")
             
             # Parse follow-ups from response
             clean_response, follow_ups = self.parse_follow_ups(assistant_message)
             
-            logger.info(f"✅ Clean response: {clean_response}")
-            logger.info(f"✅ Follow-ups: {follow_ups}")
+            logger.info(f" Clean response: {clean_response}")
+            logger.info(f" Follow-ups: {follow_ups}")
             
             # Save to conversation history (save clean response without follow-up markers)
             self.add_message(conversation_id, {"role": "user", "content": message})
@@ -393,7 +427,7 @@ A: [Applies leave and confirms] "Your leave application has been submitted succe
             )
             
         except Exception as e:
-            logger.error(f"❌ Error processing chat: {e}")
+            logger.error(f" Error processing chat: {e}")
             import traceback
             logger.error(traceback.format_exc())
             error_response = f"I apologize, but I encountered an error: {str(e)}"
@@ -418,16 +452,16 @@ chat_service = ChatService()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("🚀 Starting HRMS Chat API...")
+    logger.info(" Starting HRMS Chat API...")
     try:
         await chat_service.initialize_azure_client()
-        logger.info("✅ Azure OpenAI client initialized successfully")
+        logger.info(" Azure OpenAI client initialized successfully")
     except Exception as e:
-        logger.error(f"❌ Failed to initialize Azure client: {e}")
+        logger.error(f" Failed to initialize Azure client: {e}")
     
     yield
     
-    logger.info("🛑 Shutting down HRMS Chat API...")
+    logger.info(" Shutting down HRMS Chat API...")
     await chat_service.cleanup()
 
 app = FastAPI(
@@ -467,18 +501,8 @@ async def chat_endpoint(request: ChatRequest, auth_token: str = Depends(get_auth
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"❌ Error in chat endpoint: {e}")
+        logger.error(f" Error in chat endpoint: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    return {
-        "status": "healthy",
-        "service": "HRMS Chat API v3.0",
-        "azure_openai_initialized": chat_service.azure_openai_client is not None,
-        "mcp_server_running": chat_service.server_manager.is_running
-    }
 
 @app.get("/tools")
 async def get_available_tools(auth_token: str = Depends(get_auth_token)):
