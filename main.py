@@ -547,4 +547,4 @@ async def reset_conversation(conversation_id: str, auth_token: str = Depends(get
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), log_level="info")
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8001)), log_level="info")
