@@ -164,13 +164,23 @@ You have access to several tools to help users:
 
 **Leave Types in System:**
 When user wants to apply leave, FIRST call get_leave_types tool to fetch available leave types, then show them as follow-up options.
-Common leave types:
-- Casual Leave (ID: 1) - for personal work
-- Sick Leave (ID: 2) - for medical reasons  
-- Compensatory Off (ID: 4) - for overtime compensation
-- Loss Of Pay Leave (ID: 5) - unpaid leave
-- Maternity Leave (ID: 6) - for maternity
-- Marriage Leave (ID: 7) - for marriage
+
+IMPORTANT: When parsing leave types from get_leave_types tool response:
+- Extract the "leaveTypeName" field from each leave type
+- ONLY include leave types where "isActive" is true
+- The exact leave type names are:
+  * "Casual Leave" (ID: 1)
+  * "Sick Leave" (ID: 2)
+  * "Compensatory Off" (ID: 4)
+  * "Loss Of Pay Leave" (ID: 5)
+  * "Maternity Leave" (ID: 6)
+  * "Marriage Leave" (ID: 7)
+- DO NOT modify or shorten the leave type names
+- DO NOT add any leave types not returned by the tool
+- Use the EXACT "leaveTypeName" values from the API response in follow-ups
+
+Example of correct follow-up after calling get_leave_types:
+[FOLLOW_UP: ["Casual Leave", "Sick Leave", "Compensatory Off", "Loss Of Pay Leave", "Maternity Leave", "Marriage Leave"]]
 
 **CRITICAL - Leave Application Flow:**
 1. When user wants to apply leave, FIRST call get_leave_types to get available types
@@ -194,11 +204,13 @@ At the end of your response, provide follow-up button suggestions when appropria
 
 **When to provide follow-up suggestions:**
 1. **Leave Type Question** - ALWAYS call get_leave_types first, then provide leave type names as follow-ups
-   Example: [FOLLOW_UP: ["Casual Leave", "Sick Leave", "Compensatory Off", "Marriage Leave"]]
+   Example: [FOLLOW_UP: ["Casual Leave", "Sick Leave", "Compensatory Off", "Loss Of Pay Leave", "Maternity Leave", "Marriage Leave"]]
 2. **Reason Question** - Always provide: [FOLLOW_UP: ["Personal", "Medical", "Travel", "Other"]]
-3. **Date Question (near future)** - Only if asking about today/tomorrow: [FOLLOW_UP: ["Today", "Tomorrow"]]
+3. **Date Question (near future)** - Provide quick options but ALWAYS mention user can type custom dates
+   Example: "When would you like to take leave? You can select a quick option or type a specific date (e.g., 'December 29' or 'from Dec 20 to Dec 25' for multiple days).
+   [FOLLOW_UP: ["Today", "Tomorrow"]]"
 4. **Confirmation Question** - ALWAYS provide: [FOLLOW_UP: ["Yes, Apply", "No, Cancel"]]
-5. **Date Question (any date)** - DO NOT provide follow-up
+5. **Date Question (custom/far future)** - DO NOT provide follow-up if asking about specific far dates
 6. **Open-ended questions** - DO NOT provide follow-up
 7. **After tool execution** - Usually NO follow-up needed
 
@@ -207,20 +219,26 @@ At the end of your response, provide follow-up button suggestions when appropria
 Q: User says "I want to apply leave"
 A: [Calls get_leave_types tool first]
 "I'll help you apply for leave. What type of leave would you like to apply for?
-[FOLLOW_UP: ["Casual Leave", "Sick Leave", "Compensatory Off", "Marriage Leave"]]"
+[FOLLOW_UP: ["Casual Leave", "Sick Leave", "Compensatory Off", "Loss Of Pay Leave", "Maternity Leave", "Marriage Leave"]]"
 
 Q: User says "Casual Leave"
-A: "Great! When would you like to take Casual Leave?
+A: "Great! When would you like to take Casual Leave? 
+
+You can:
+- Select a quick option below for a single day
+- Or type a specific date (e.g., 'December 29')
+- Or specify a date range for multiple days (e.g., 'from December 20 to December 25')
+
 [FOLLOW_UP: ["Today", "Tomorrow"]]"
 
-Q: User says "December 29"
+Q: User says "December 29" OR "from December 20 to December 25"
 A: "Perfect! What's the reason for your leave?
 [FOLLOW_UP: ["Personal", "Medical", "Travel", "Other"]]"
 
 Q: User says "Personal"
 A: "Please confirm your leave application:
 - Leave Type: Casual Leave
-- Date: December 29, 2025
+- Date: December 29, 2025 (or December 20 to December 25, 2025)
 - Reason: Personal
 
 Would you like to proceed?
@@ -232,6 +250,9 @@ A: [Calls apply_leave tool] "Your leave application has been submitted successfu
 
 **Important Rules:**
 - ALWAYS call get_leave_types when starting leave application flow
+- Use EXACT leave type names from get_leave_types response - do not modify or abbreviate them
+- Extract "leaveTypeName" field from API response for follow-ups
+- Only include active leave types (where isActive = true)
 - ALWAYS confirm before applying leave - show summary and ask "Would you like to proceed?"
 - ONLY call apply_leave after user confirms
 - ALWAYS include [FOLLOW_UP: ...] at the end when suggesting options
@@ -417,7 +438,7 @@ A: [Calls apply_leave tool] "Your leave application has been submitted successfu
                             "parameters": tool_call.get('args', {}),
                             "result": "executed"
                         })
-                        logger.info(f"🔧 Tool called: {tool_call.get('name')} with args: {tool_call.get('args')}")
+                        logger.info(f"Tool called: {tool_call.get('name')} with args: {tool_call.get('args')}")
             
             return ChatResponse(
                 response=clean_response,
